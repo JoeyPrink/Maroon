@@ -5,6 +5,10 @@ using UnityEditor;
 using System.Collections.Generic;
 using System.Reflection;
 using Object = UnityEngine.Object;
+#if UNITY_2018_3_OR_NEWER
+using PrefabStage = UnityEditor.Experimental.SceneManagement.PrefabStage;
+using PrefabStageUtility = UnityEditor.Experimental.SceneManagement.PrefabStageUtility;
+#endif
 
 namespace AssetUsageDetectorNamespace
 {
@@ -16,6 +20,7 @@ namespace AssetUsageDetectorNamespace
 
 		private const string PREFS_SEARCH_SCENES = "AUD_SceneSearch";
 		private const string PREFS_SEARCH_ASSETS = "AUD_AssetsSearch";
+		private const string PREFS_SEARCH_PROJECT_SETTINGS = "AUD_ProjectSettingsSearch";
 		private const string PREFS_DONT_SEARCH_SOURCE_ASSETS = "AUD_AssetsExcludeSrc";
 		private const string PREFS_SEARCH_DEPTH_LIMIT = "AUD_Depth";
 		private const string PREFS_SEARCH_FIELDS = "AUD_Fields";
@@ -42,6 +47,7 @@ namespace AssetUsageDetectorNamespace
 		private bool searchInAllScenes = true; // All scenes (including scenes that are not in build)
 		private bool searchInAssetsFolder = true; // Assets in Project window
 		private bool dontSearchInSourceAssets = true; // objectsToSearch won't be searched for internal references
+		private bool searchInProjectSettings = true; // Player Settings, Graphics Settings etc.
 
 		private List<Object> searchInAssetsSubset = new List<Object>() { null }; // If not empty, only these assets are searched for references
 		private List<Object> excludedAssets = new List<Object>() { null }; // These assets won't be searched for references
@@ -68,6 +74,9 @@ namespace AssetUsageDetectorNamespace
 		private readonly ObjectListDrawer searchInAssetsSubsetDrawer = new ObjectListDrawer( "Search following asset(s) only:", false );
 		private readonly ObjectListDrawer excludedAssetsDrawer = new ObjectListDrawer( "Don't search following asset(s):", false );
 		private readonly ObjectListDrawer excludedScenesDrawer = new ObjectListDrawer( "Don't search in following scene(s):", false );
+
+		private readonly GUIContent restoreInitialSceneSetupLabel = new GUIContent( "Restore initial scene setup (Recommended)", "For example, if scene A was open when the search was started and scenes A and B are open after the search is completed, clicking the \"Reset Search\" button will automatically close scene B" );
+		private readonly GUIContent showTooltipsLabel = new GUIContent( "Show tooltips", "Display nodes' contents in a tooltip when cursor hovers over them" );
 
 		private Vector2 scrollPosition = Vector2.zero;
 
@@ -115,14 +124,13 @@ namespace AssetUsageDetectorNamespace
 		}
 
 		// Quickly initiate search for the selected assets
-		[MenuItem( "GameObject/Search for References", priority = 49 )]
+		[MenuItem( "GameObject/Search for References/This Object Only", priority = 49 )]
 		[MenuItem( "Assets/Search for References", priority = 1000 )]
 		private static void SearchSelectedAssetReferences( MenuCommand command )
 		{
 			// This happens when this button is clicked via hierarchy's right click context menu
 			// and is called once for each object in the selection. We don't want that, we want
-			// the function to be called only once so that there aren't multiple empty parents 
-			// generated in one call
+			// the function to be called only once
 			if( command.context )
 			{
 				EditorApplication.update -= CallSearchSelectedAssetReferencesOnce;
@@ -132,8 +140,21 @@ namespace AssetUsageDetectorNamespace
 				ShowAndSearch( Selection.objects );
 		}
 
+		[MenuItem( "GameObject/Search for References/Include Children", priority = 49 )]
+		private static void SearchSelectedAssetReferencesWithChildren( MenuCommand command )
+		{
+			if( command.context )
+			{
+				EditorApplication.update -= CallSearchSelectedAssetReferencesWithChildrenOnce;
+				EditorApplication.update += CallSearchSelectedAssetReferencesWithChildrenOnce;
+			}
+			else
+				ShowAndSearch( Selection.objects, true );
+		}
+
 		// Show the menu item only if there is a selection in the Editor
-		[MenuItem( "GameObject/Search for References", validate = true )]
+		[MenuItem( "GameObject/Search for References/This Object Only", validate = true )]
+		[MenuItem( "GameObject/Search for References/Include Children", validate = true )]
 		[MenuItem( "Assets/Search for References", validate = true )]
 		private static bool SearchSelectedAssetReferencesValidate( MenuCommand command )
 		{
@@ -141,13 +162,13 @@ namespace AssetUsageDetectorNamespace
 		}
 
 		// Quickly show the AssetUsageDetector window and initiate a search
-		public static void ShowAndSearch( IEnumerable<Object> searchObjects )
+		public static void ShowAndSearch( IEnumerable<Object> searchObjects, bool? shouldSearchChildren = null )
 		{
-			ShowAndSearchInternal( searchObjects, null );
+			ShowAndSearchInternal( searchObjects, null, shouldSearchChildren );
 		}
 
 		// Quickly show the AssetUsageDetector window and initiate a search
-		public static void ShowAndSearch( AssetUsageDetector.Parameters searchParameters )
+		public static void ShowAndSearch( AssetUsageDetector.Parameters searchParameters, bool? shouldSearchChildren = null )
 		{
 			if( searchParameters == null )
 			{
@@ -155,7 +176,7 @@ namespace AssetUsageDetectorNamespace
 				return;
 			}
 
-			ShowAndSearchInternal( searchParameters.objectsToSearch, searchParameters );
+			ShowAndSearchInternal( searchParameters.objectsToSearch, searchParameters, shouldSearchChildren );
 		}
 
 		private static void CallSearchSelectedAssetReferencesOnce()
@@ -164,9 +185,15 @@ namespace AssetUsageDetectorNamespace
 			SearchSelectedAssetReferences( new MenuCommand( null ) );
 		}
 
-		private static void ShowAndSearchInternal( IEnumerable<Object> searchObjects, AssetUsageDetector.Parameters searchParameters )
+		private static void CallSearchSelectedAssetReferencesWithChildrenOnce()
 		{
-			if( mainWindow != null && !mainWindow.ReturnToSetupPhase( true ) )
+			EditorApplication.update -= CallSearchSelectedAssetReferencesWithChildrenOnce;
+			SearchSelectedAssetReferencesWithChildren( new MenuCommand( null ) );
+		}
+
+		private static void ShowAndSearchInternal( IEnumerable<Object> searchObjects, AssetUsageDetector.Parameters searchParameters, bool? shouldSearchChildren )
+		{
+			if( mainWindow != null && !mainWindow.ReturnToSetupPhase( true, true ) )
 			{
 				Debug.LogError( "Need to reset the previous search first!" );
 				return;
@@ -178,7 +205,7 @@ namespace AssetUsageDetectorNamespace
 			if( searchObjects != null )
 			{
 				foreach( Object obj in searchObjects )
-					mainWindow.objectsToSearch.Add( new ObjectToSearch( obj ) );
+					mainWindow.objectsToSearch.Add( new ObjectToSearch( obj, shouldSearchChildren ) );
 			}
 
 			if( searchParameters != null )
@@ -186,6 +213,7 @@ namespace AssetUsageDetectorNamespace
 				mainWindow.ParseSceneSearchMode( searchParameters.searchInScenes );
 				mainWindow.searchInAssetsFolder = searchParameters.searchInAssetsFolder;
 				mainWindow.dontSearchInSourceAssets = searchParameters.dontSearchInSourceAssets;
+				mainWindow.searchInProjectSettings = searchParameters.searchInProjectSettings;
 				mainWindow.searchDepthLimit = searchParameters.searchDepthLimit;
 				mainWindow.fieldModifiers = searchParameters.fieldModifiers;
 				mainWindow.propertyModifiers = searchParameters.propertyModifiers;
@@ -230,15 +258,15 @@ namespace AssetUsageDetectorNamespace
 			mainWindow = this;
 
 #if UNITY_2018_3_OR_NEWER
-			UnityEditor.Experimental.SceneManagement.PrefabStage.prefabStageClosing -= ReplacePrefabStageObjectsWithAssets;
-			UnityEditor.Experimental.SceneManagement.PrefabStage.prefabStageClosing += ReplacePrefabStageObjectsWithAssets;
+			PrefabStage.prefabStageClosing -= ReplacePrefabStageObjectsWithAssets;
+			PrefabStage.prefabStageClosing += ReplacePrefabStageObjectsWithAssets;
 #endif
 		}
 
 		private void OnDisable()
 		{
 #if UNITY_2018_3_OR_NEWER
-			UnityEditor.Experimental.SceneManagement.PrefabStage.prefabStageClosing -= ReplacePrefabStageObjectsWithAssets;
+			PrefabStage.prefabStageClosing -= ReplacePrefabStageObjectsWithAssets;
 #endif
 
 			if( mainWindow == this )
@@ -252,11 +280,8 @@ namespace AssetUsageDetectorNamespace
 
 			SavePrefs();
 
-			if( searchResult != null && currentPhase == Phase.Complete && !EditorApplication.isPlaying && searchResult.IsSceneSetupDifferentThanCurrentSetup() )
-			{
-				if( EditorUtility.DisplayDialog( "Scenes", "Restore initial scene setup?", "Yes", "Leave it as is" ) )
-					searchResult.RestoreInitialSceneSetup();
-			}
+			if( searchResult != null && currentPhase == Phase.Complete )
+				searchResult.RestoreInitialSceneSetup( true );
 		}
 
 		private void OnFocus()
@@ -269,6 +294,7 @@ namespace AssetUsageDetectorNamespace
 			EditorPrefs.SetInt( PREFS_SEARCH_SCENES, (int) GetSceneSearchMode( false ) );
 			EditorPrefs.SetBool( PREFS_SEARCH_ASSETS, searchInAssetsFolder );
 			EditorPrefs.SetBool( PREFS_DONT_SEARCH_SOURCE_ASSETS, dontSearchInSourceAssets );
+			EditorPrefs.SetBool( PREFS_SEARCH_PROJECT_SETTINGS, searchInProjectSettings );
 			EditorPrefs.SetInt( PREFS_SEARCH_DEPTH_LIMIT, searchDepthLimit );
 			EditorPrefs.SetInt( PREFS_SEARCH_FIELDS, (int) fieldModifiers );
 			EditorPrefs.SetInt( PREFS_SEARCH_PROPERTIES, (int) propertyModifiers );
@@ -285,6 +311,7 @@ namespace AssetUsageDetectorNamespace
 
 			searchInAssetsFolder = EditorPrefs.GetBool( PREFS_SEARCH_ASSETS, true );
 			dontSearchInSourceAssets = EditorPrefs.GetBool( PREFS_DONT_SEARCH_SOURCE_ASSETS, true );
+			searchInProjectSettings = EditorPrefs.GetBool( PREFS_SEARCH_PROJECT_SETTINGS, true );
 			searchDepthLimit = EditorPrefs.GetInt( PREFS_SEARCH_DEPTH_LIMIT, 4 );
 
 			// Fetch public, protected and private non-static fields and properties from objects by default
@@ -366,10 +393,10 @@ namespace AssetUsageDetectorNamespace
 				// If we are stuck at this phase, then we have encountered an exception
 				GUILayout.Label( ". . . Search in progress or something went wrong (check console) . . ." );
 
-				restoreInitialSceneSetup = EditorGUILayout.ToggleLeft( "Restore initial scene setup (Recommended)", restoreInitialSceneSetup );
+				restoreInitialSceneSetup = EditorGUILayout.ToggleLeft( restoreInitialSceneSetupLabel, restoreInitialSceneSetup );
 
 				if( GUILayout.Button( "RETURN", Utilities.GL_HEIGHT_30 ) )
-					ReturnToSetupPhase( restoreInitialSceneSetup );
+					ReturnToSetupPhase( restoreInitialSceneSetup, false );
 			}
 			else if( currentPhase == Phase.Setup )
 			{
@@ -378,7 +405,10 @@ namespace AssetUsageDetectorNamespace
 
 				GUILayout.Space( 10 );
 
+				Color c = GUI.backgroundColor;
+				GUI.backgroundColor = Color.cyan;
 				GUILayout.Box( "SEARCH IN", Utilities.BoxGUIStyle, Utilities.GL_EXPAND_WIDTH );
+				GUI.backgroundColor = c;
 
 				searchInAssetsFolder = EditorGUILayout.ToggleLeft( "Project window (Assets folder)", searchInAssetsFolder );
 
@@ -397,7 +427,7 @@ namespace AssetUsageDetectorNamespace
 					GUILayout.EndHorizontal();
 				}
 
-				GUILayout.Space( 10 );
+				Utilities.DrawSeparatorLine();
 
 				if( searchInAllScenes && !EditorApplication.isPlaying )
 					GUI.enabled = false;
@@ -432,6 +462,10 @@ namespace AssetUsageDetectorNamespace
 
 				GUILayout.EndVertical();
 				GUILayout.EndHorizontal();
+
+				Utilities.DrawSeparatorLine();
+
+				searchInProjectSettings = EditorGUILayout.ToggleLeft( "Project Settings (Player Settings, Graphics Settings etc.)", searchInProjectSettings );
 
 				GUILayout.Space( 10 );
 
@@ -487,7 +521,9 @@ namespace AssetUsageDetectorNamespace
 
 				//GUILayout.Space( 10 );
 
+				GUI.backgroundColor = Color.cyan;
 				GUILayout.Box( "SETTINGS", Utilities.BoxGUIStyle, Utilities.GL_EXPAND_WIDTH );
+				GUI.backgroundColor = c;
 
 				lazySceneSearch = EditorGUILayout.ToggleLeft( "Lazy scene search: scenes are searched in detail only when they are manually refreshed (faster search)", lazySceneSearch );
 				noAssetDatabaseChanges = EditorGUILayout.ToggleLeft( "I haven't modified any assets/scenes since the last search (faster search)", noAssetDatabaseChanges );
@@ -496,11 +532,14 @@ namespace AssetUsageDetectorNamespace
 				GUILayout.Space( 10 );
 
 				// Don't let the user press the GO button without any valid search location
-				if( !searchInAllScenes && !searchInOpenScenes && !searchInScenesInBuild && !searchInAssetsFolder )
+				if( !searchInAllScenes && !searchInOpenScenes && !searchInScenesInBuild && !searchInAssetsFolder && !searchInProjectSettings )
 					GUI.enabled = false;
 
 				if( GUILayout.Button( "GO!", Utilities.GL_HEIGHT_30 ) )
+				{
 					InitiateSearch();
+					GUIUtility.ExitGUI();
+				}
 			}
 			else if( currentPhase == Phase.Complete )
 			{
@@ -512,10 +551,10 @@ namespace AssetUsageDetectorNamespace
 				GUILayout.Space( 10 );
 				GUI.enabled = true;
 
-				restoreInitialSceneSetup = EditorGUILayout.ToggleLeft( "Restore initial scene setup after search is reset (Recommended)", restoreInitialSceneSetup );
+				restoreInitialSceneSetup = EditorGUILayout.ToggleLeft( restoreInitialSceneSetupLabel, restoreInitialSceneSetup );
 
 				if( GUILayout.Button( "Reset Search", Utilities.GL_HEIGHT_30 ) )
-					ReturnToSetupPhase( restoreInitialSceneSetup );
+					ReturnToSetupPhase( restoreInitialSceneSetup, false );
 
 				if( searchResult == null )
 				{
@@ -525,10 +564,10 @@ namespace AssetUsageDetectorNamespace
 				else if( !searchResult.SearchCompletedSuccessfully )
 					EditorGUILayout.HelpBox( "ERROR: search was interrupted, check the logs for more info", MessageType.Error );
 
-				Color c = GUI.color;
-				GUI.color = Color.green;
+				Color c = GUI.backgroundColor;
+				GUI.backgroundColor = Color.green;
 				GUILayout.Box( "Don't forget to save scene(s) if you made any changes!", Utilities.BoxGUIStyle, Utilities.GL_EXPAND_WIDTH );
-				GUI.color = c;
+				GUI.backgroundColor = c;
 
 				if( searchResult.NumberOfGroups == 0 )
 				{
@@ -560,11 +599,11 @@ namespace AssetUsageDetectorNamespace
 
 					//GUILayout.Space( 10 );
 
-					searchResultDrawParameters.showTooltips = EditorGUILayout.ToggleLeft( "Show tooltips", searchResultDrawParameters.showTooltips );
+					searchResultDrawParameters.showTooltips = EditorGUILayout.ToggleLeft( showTooltipsLabel, searchResultDrawParameters.showTooltips );
 					noAssetDatabaseChanges = EditorGUILayout.ToggleLeft( "I haven't modified any assets/scenes since the last search (faster Refresh)", noAssetDatabaseChanges );
 					searchResultDrawParameters.noAssetDatabaseChanges = noAssetDatabaseChanges;
 
-					GUILayout.Space( 10 );
+					Utilities.DrawSeparatorLine();
 
 					GUILayout.Label( "Path drawing mode:" );
 
@@ -590,7 +629,7 @@ namespace AssetUsageDetectorNamespace
 
 					GUILayout.Space( 35 );
 
-					if( EditorGUILayout.ToggleLeft( "Shortest: Draw only the last two nodes of complete paths", searchResultDrawParameters.pathDrawingMode == PathDrawingMode.Shortest ) )
+					if( EditorGUILayout.ToggleLeft( "Shortest: Draw only the last two nodes of the complete paths", searchResultDrawParameters.pathDrawingMode == PathDrawingMode.Shortest ) )
 						searchResultDrawParameters.pathDrawingMode = PathDrawingMode.Shortest;
 
 					GUILayout.EndHorizontal();
@@ -623,7 +662,7 @@ namespace AssetUsageDetectorNamespace
 				SavePrefs();
 
 #if UNITY_2018_3_OR_NEWER
-				ReplacePrefabStageObjectsWithAssets( UnityEditor.Experimental.SceneManagement.PrefabStageUtility.GetCurrentPrefabStage() );
+				ReplacePrefabStageObjectsWithAssets( PrefabStageUtility.GetCurrentPrefabStage() );
 #endif
 
 				// Start searching
@@ -636,6 +675,7 @@ namespace AssetUsageDetectorNamespace
 					excludedAssetsFromSearch = !excludedAssets.IsEmpty() ? excludedAssets.ToArray() : null,
 					dontSearchInSourceAssets = dontSearchInSourceAssets,
 					excludedScenesFromSearch = !excludedScenes.IsEmpty() ? excludedScenes.ToArray() : null,
+					searchInProjectSettings = searchInProjectSettings,
 					//fieldModifiers = fieldModifiers,
 					//propertyModifiers = propertyModifiers,
 					//searchDepthLimit = searchDepthLimit,
@@ -651,13 +691,17 @@ namespace AssetUsageDetectorNamespace
 
 #if UNITY_2018_3_OR_NEWER
 		// Try replacing searched objects who are part of currently open prefab stage with their corresponding prefab assets
-		public void ReplacePrefabStageObjectsWithAssets( UnityEditor.Experimental.SceneManagement.PrefabStage prefabStage )
+		public void ReplacePrefabStageObjectsWithAssets( PrefabStage prefabStage )
 		{
 			if( prefabStage == null || !prefabStage.stageHandle.IsValid() )
 				return;
 
+#if UNITY_2020_1_OR_NEWER
+			GameObject prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>( prefabStage.assetPath );
+#else
 			GameObject prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>( prefabStage.prefabAssetPath );
-			if( prefabAsset == null )
+#endif
+			if( prefabAsset == null || prefabAsset.Equals( null ) )
 				return;
 
 			for( int i = 0; i < objectsToSearch.Count; i++ )
@@ -665,7 +709,7 @@ namespace AssetUsageDetectorNamespace
 				Object obj = objectsToSearch[i].obj;
 				if( obj != null && !obj.Equals( null ) && obj is GameObject && prefabStage.IsPartOfPrefabContents( (GameObject) obj ) )
 				{
-					GameObject prefabStageObjectSource = ( (GameObject) obj ).FollowSymmetricHierarchy( prefabAsset );
+					GameObject prefabStageObjectSource = ( (GameObject) obj ).FollowSymmetricHierarchy( prefabStage.prefabContentsRoot, prefabAsset );
 					if( prefabStageObjectSource != null )
 						objectsToSearch[i].obj = prefabStageObjectSource;
 
@@ -675,7 +719,7 @@ namespace AssetUsageDetectorNamespace
 						obj = subAssets[j].subAsset;
 						if( obj != null && !obj.Equals( null ) && obj is GameObject && prefabStage.IsPartOfPrefabContents( (GameObject) obj ) )
 						{
-							prefabStageObjectSource = ( (GameObject) obj ).FollowSymmetricHierarchy( prefabAsset );
+							prefabStageObjectSource = ( (GameObject) obj ).FollowSymmetricHierarchy( prefabStage.prefabContentsRoot, prefabAsset );
 							if( prefabStageObjectSource != null )
 								subAssets[j].subAsset = prefabStageObjectSource;
 						}
@@ -685,9 +729,9 @@ namespace AssetUsageDetectorNamespace
 		}
 #endif
 
-		private bool ReturnToSetupPhase( bool restoreInitialSceneSetup )
+		private bool ReturnToSetupPhase( bool restoreInitialSceneSetup, bool sceneSetupRestorationIsOptional )
 		{
-			if( searchResult != null && restoreInitialSceneSetup && !EditorApplication.isPlaying && !searchResult.RestoreInitialSceneSetup() )
+			if( searchResult != null && restoreInitialSceneSetup && !EditorApplication.isPlaying && !searchResult.RestoreInitialSceneSetup( sceneSetupRestorationIsOptional ) )
 				return false;
 
 			searchResult = null;

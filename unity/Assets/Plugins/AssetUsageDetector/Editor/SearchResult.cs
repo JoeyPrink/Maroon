@@ -127,6 +127,7 @@ namespace AssetUsageDetectorNamespace
 			Object[] searchInScenesSubset = m_searchParameters.searchInScenesSubset;
 			bool searchInAssetsFolder = m_searchParameters.searchInAssetsFolder;
 			Object[] searchInAssetsSubset = m_searchParameters.searchInAssetsSubset;
+			bool searchInProjectSettings = m_searchParameters.searchInProjectSettings;
 
 			try
 			{
@@ -134,6 +135,15 @@ namespace AssetUsageDetectorNamespace
 				{
 					m_searchParameters.searchInScenes = SceneSearchMode.None;
 					m_searchParameters.searchInScenesSubset = null;
+					m_searchParameters.searchInProjectSettings = false;
+				}
+				else if( searchResultGroup.Type == SearchResultGroup.GroupType.ProjectSettings )
+				{
+					m_searchParameters.searchInScenes = SceneSearchMode.None;
+					m_searchParameters.searchInScenesSubset = null;
+					m_searchParameters.searchInAssetsFolder = false;
+					m_searchParameters.searchInAssetsSubset = null;
+					m_searchParameters.searchInProjectSettings = true;
 				}
 				else if( searchResultGroup.Type == SearchResultGroup.GroupType.Scene )
 				{
@@ -141,6 +151,7 @@ namespace AssetUsageDetectorNamespace
 					m_searchParameters.searchInScenesSubset = new Object[1] { AssetDatabase.LoadAssetAtPath<SceneAsset>( searchResultGroup.Title ) };
 					m_searchParameters.searchInAssetsFolder = false;
 					m_searchParameters.searchInAssetsSubset = null;
+					m_searchParameters.searchInProjectSettings = false;
 				}
 				else
 				{
@@ -148,6 +159,7 @@ namespace AssetUsageDetectorNamespace
 					m_searchParameters.searchInScenesSubset = null;
 					m_searchParameters.searchInAssetsFolder = false;
 					m_searchParameters.searchInAssetsSubset = null;
+					m_searchParameters.searchInProjectSettings = false;
 				}
 
 				m_searchParameters.lazySceneSearch = false;
@@ -188,6 +200,7 @@ namespace AssetUsageDetectorNamespace
 				m_searchParameters.searchInScenesSubset = searchInScenesSubset;
 				m_searchParameters.searchInAssetsFolder = searchInAssetsFolder;
 				m_searchParameters.searchInAssetsSubset = searchInAssetsSubset;
+				m_searchParameters.searchInProjectSettings = searchInProjectSettings;
 			}
 		}
 
@@ -217,7 +230,7 @@ namespace AssetUsageDetectorNamespace
 			// To work nicely with GUILayout and scroll view
 			EditorGUILayout.GetControlRect( Utilities.GL_EXPAND_WIDTH, GUILayout.Height( guiHeight ) );
 
-			if( parameters.tooltip != null )
+			if( !string.IsNullOrEmpty( parameters.tooltip ) )
 			{
 				// Show tooltip at mouse position
 				Vector2 mousePos = Event.current.mousePosition;
@@ -315,13 +328,16 @@ namespace AssetUsageDetectorNamespace
 
 		// Close the scenes that were not part of the initial scene setup
 		// Returns true if initial scene setup is restored successfully
-		public bool RestoreInitialSceneSetup()
+		public bool RestoreInitialSceneSetup( bool optional )
 		{
 			if( initialSceneSetup == null || initialSceneSetup.Length == 0 )
 				return true;
 
 			if( EditorApplication.isPlaying || !EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo() )
 				return false;
+
+			if( optional && IsSceneSetupDifferentThanCurrentSetup() && !EditorUtility.DisplayDialog( "Scenes", "Restore initial scene setup?", "Yes", "Leave it as is" ) )
+				return true;
 
 			for( int i = 0; i < initialSceneSetup.Length; i++ )
 			{
@@ -413,7 +429,7 @@ namespace AssetUsageDetectorNamespace
 	// Custom class to hold the results for a single scene or Assets folder
 	public class SearchResultGroup
 	{
-		public enum GroupType { Assets = 0, Scene = 1, DontDestroyOnLoad = 2 };
+		public enum GroupType { Assets = 0, Scene = 1, DontDestroyOnLoad = 2, ProjectSettings = 3 };
 
 		// Custom struct to hold a single path to a reference
 		public struct ReferencePath
@@ -666,8 +682,8 @@ namespace AssetUsageDetectorNamespace
 				parameters.shouldRefreshEditorWindow = true; // A repaint is needed to work nicely with GUILayout
 			}
 
-			Color c = GUI.color;
-			GUI.color = Color.cyan;
+			Color c = GUI.backgroundColor;
+			GUI.backgroundColor = Color.cyan;
 
 			Rect rect = parameters.guiRect;
 			float width = rect.width;
@@ -726,7 +742,8 @@ namespace AssetUsageDetectorNamespace
 
 			if( IsExpanded )
 			{
-				GUI.color = Color.yellow;
+				// On light skin, yellow background looks better than light grey background
+				GUI.backgroundColor = EditorGUIUtility.isProSkin ? c : Color.yellow;
 
 				if( PendingSearch )
 				{
@@ -751,7 +768,7 @@ namespace AssetUsageDetectorNamespace
 			}
 
 			parameters.guiRect = rect;
-			GUI.color = c;
+			GUI.backgroundColor = c;
 		}
 
 		private void GenerateGUINodes( SearchResultDrawParameters parameters )

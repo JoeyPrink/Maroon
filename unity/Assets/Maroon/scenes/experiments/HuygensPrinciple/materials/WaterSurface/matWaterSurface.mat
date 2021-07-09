@@ -162,7 +162,7 @@ Material:
     - _Level2Color: {r: 0.69, g: 0.63, b: 0.30999997, a: 1}
     - _Level3Color: {r: 0.75, g: 0.53, b: 0, a: 1}
     - _PeakColor: {r: 0.8, g: 0.9, b: 0.9, a: 1}
-    - _PlatePosition: {r: 0.5082313, g: 0.74200976, b: 2.7459965, a: 0}
+    - _PlatePosition: {r: 0.54831123, g: 1.0300097, b: 0.70578, a: 0}
     - _ReflectColor: {r: 0.33823532, g: 0.33823532, b: 0.33823532, a: 0.5}
     - _SpecColor: {r: 0.7205882, g: 0, b: 0, a: 1}
     - _TintColor: {r: 0.5, g: 0.5, b: 0.5, a: 0.5}
